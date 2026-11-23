@@ -1,0 +1,787 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>
+      11 · Downstream of marine cloud brightening · Realtime Weather
+    </title>
+    <!-- style.css is the shared Realtime Weather look, copied into this folder. Page styles below it. -->
+    <link rel="stylesheet" href="style.css" />
+    <style>
+      /* A single-screen web map: the frame spans the window instead of a reading column. */
+      main.app {
+        max-width: none;
+        padding: 16px 16px 16px;
+      }
+      main.app > * {
+        max-width: none;
+      }
+
+      /* The shared site header slides in when you scroll up or move the pointer to the top of the window. */
+      main.app .site-header {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 20;
+        margin: 0;
+        padding: 14px 16px 10px;
+        background: var(--bg);
+        transform: translateY(-100%);
+        transition: transform 0.2s ease;
+      }
+      main.app .site-header.shown,
+      main.app .site-header:focus-within {
+        transform: none;
+      }
+
+      .titlebar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 4px 20px;
+      }
+      .titlebar h1 {
+        font-size: 24px;
+        margin: 0;
+      }
+      .titlebar p {
+        margin: 4px 0 0;
+        font-size: 15px;
+        color: var(--muted);
+        max-width: 60rem;
+      }
+      button.plain {
+        font: 14px var(--font);
+        padding: 4px 12px;
+        cursor: pointer;
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--line);
+      }
+      button.plain:hover {
+        background: var(--fg);
+        color: var(--bg);
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 18px;
+        margin: 12px 0 10px;
+        font-size: 15px;
+      }
+      .controls .group {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .controls .group > span {
+        margin-right: 8px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .controls .group button {
+        font: 14px var(--font);
+        padding: 4px 12px;
+        cursor: pointer;
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--line);
+      }
+      .controls .group button + button {
+        border-left: 0;
+      }
+      .controls .group button[aria-pressed="true"] {
+        background: var(--fg);
+        color: var(--bg);
+      }
+
+      .stage {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 380px;
+        gap: 28px;
+        align-items: start;
+      }
+      .mapwrap {
+        min-width: 0;
+      }
+      /* The map is a scientific image: it keeps its light surface in dark mode too. */
+      #map {
+        display: block;
+        width: min(100%, calc((100vh - 220px) * 360 / 164));
+        min-width: 280px;
+        aspect-ratio: 360 / 164; /* 84°N to 80°S, set in app.js */
+        height: auto;
+        border: 1px solid var(--line);
+        background: #fff;
+        cursor: crosshair;
+        touch-action: manipulation;
+      }
+      #map.over-place {
+        cursor: pointer;
+      }
+      /* Fixed columns, so the readout doesn't shift as values change. */
+      .readout {
+        display: grid;
+        grid-template-columns: 4.5em 5.5em 3.5em 8em auto;
+        column-gap: 14px;
+        font-size: 14px;
+        min-height: 1.5em;
+        margin: 6px 0 0;
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      /* Map colours. Change them here; the map and legend read these values.
+         --tipping-increased / -unclear / -reduced: the soft black line around tipping elements,
+           with a white halo; thickest for increased risk, thinnest for reduced risk
+           (width and blur are set in app.js, STYLES; the halo in HALO);
+         --sel-map: hovered or selected tipping element on the map, and the tab behind its name;
+         --sel: the mark under its name in the panel;
+         --brightened-edge: the soft glow around brightened regions; --brightened-text: their labels. */
+      :root {
+        --tipping-increased: #000;
+        --tipping-unclear: #000;
+        --tipping-reduced: #000;
+        --sel-map: #e2fba7;
+        --sel: #e2fba7;
+        --brightened-edge: #5f7590; /* grey-blue */
+        --brightened-text: #2f4057;
+      }
+      /* The selected name in the panel is marked with a thick yellow underline, which reads in light and dark mode. */
+      .sel {
+        text-decoration: underline 5px var(--sel);
+        text-underline-offset: 3px;
+        text-decoration-skip-ink: none;
+      }
+      .legend {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 16px;
+      }
+      .legend .row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px 18px;
+      }
+      .legend .row.scale {
+        align-items: flex-start;
+      }
+      .legend .brightened {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        height: 12px;
+        margin-right: 40px; /* ample space before the colour scale */
+      }
+      .legend .brightened > span {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .legend .brightened > span + span {
+        margin-left: 18px;
+      }
+      .legend .brightened svg {
+        margin-right: 0;
+      }
+      .legend .row.tipping {
+        column-gap: 14px;
+      }
+      .legend .scalelabel {
+        line-height: 12px; /* same as the bar's height, so the label sits flush with its top */
+      }
+      .legend .swatch {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        vertical-align: -2px;
+        border: 1px solid #0003;
+      }
+      .legend .swatch + .swatch {
+        border-left: 0;
+        margin-right: 6px;
+      }
+      .legend svg {
+        vertical-align: -3px;
+        margin-right: 4px;
+      }
+      .bar {
+        display: inline-grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 24px;
+        row-gap: 2px;
+        font-variant-numeric: tabular-nums;
+      }
+      .bar i {
+        display: block;
+        height: 12px;
+        border: 1px solid #0003;
+        border-right: 0;
+      }
+      .bar i:last-of-type {
+        border-right: 1px solid #0003;
+      }
+      .bar b {
+        font-weight: 400;
+        font-size: 11px;
+        text-align: center;
+        grid-row: 2;
+        white-space: nowrap;
+      }
+
+      .panel {
+        max-height: calc(100vh - 160px);
+        overflow: auto;
+        font-size: 15px;
+      }
+      .panel h2 {
+        margin: 0 0 4px;
+        padding: 0;
+        border: 0;
+        font-size: 13px;
+      }
+      .panel h3 {
+        font-size: 20px;
+        margin: 0 0 2px;
+        line-height: 1.25;
+      }
+      .panel p {
+        margin: 6px 0;
+      }
+      .panel .ms {
+        color: var(--muted);
+        font-size: 14px;
+        margin: 0 0 10px;
+      }
+      .panel .ms strong {
+        color: var(--fg);
+      }
+      .panel .verdict {
+        font-size: 17px;
+        font-weight: 700;
+        margin: 12px 0 0;
+      }
+      .panel .close {
+        float: right;
+        margin-left: 8px;
+      }
+      .panel table {
+        width: 100%;
+        font-size: 14px;
+        margin: 8px 0;
+        font-variant-numeric: tabular-nums;
+      }
+      .panel th,
+      .panel td {
+        padding: 3px 6px;
+      }
+      .panel tr.current td {
+        font-weight: 700;
+      }
+      .panel td button {
+        all: unset;
+        cursor: pointer;
+        color: var(--muted);
+      }
+      .panel td button:hover,
+      .panel td button:focus-visible {
+        color: var(--fg);
+      }
+      .panel tr.current td button {
+        color: var(--fg);
+      }
+      .panel .groups p {
+        margin: 10px 0;
+      }
+      .panel .groups .nw {
+        white-space: nowrap;
+      }
+      .panel .groups svg {
+        vertical-align: -3px;
+        margin-right: 6px;
+      }
+      .panel .groups button {
+        all: unset;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .panel .groups button:hover,
+      .panel .groups button:focus-visible {
+        text-decoration-color: var(--sel);
+        text-decoration-thickness: 4px;
+      }
+      .panel .small {
+        font-size: 13px;
+      }
+      .muted {
+        color: var(--muted);
+      }
+
+      dialog.about {
+        width: min(46rem, calc(100% - 32px));
+        max-height: 86vh;
+        padding: 0;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        color: var(--fg);
+      }
+      dialog.about::backdrop {
+        background: rgba(0, 0, 0, 0.45);
+      }
+      .about-head {
+        position: sticky;
+        top: 0;
+        background: var(--bg);
+        padding: 14px 20px 8px;
+        border-bottom: 1px solid var(--line);
+      }
+      .about-head .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+      }
+      .about-head strong {
+        font-size: 18px;
+      }
+      .about-head nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 14px;
+        font-size: 14px;
+        margin-top: 6px;
+      }
+      .about-body {
+        padding: 0 20px 24px;
+      }
+      .about-body h2 {
+        margin-top: 32px;
+        scroll-margin-top: 104px;
+      }
+      .about-body h2:first-child {
+        border-top: 0;
+        margin-top: 20px;
+        padding-top: 0;
+      }
+      .about-body h3 {
+        font-size: 15px;
+        margin: 16px 0 4px;
+      }
+      .site-footer p {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 20px;
+      }
+      .about-body li {
+        margin: 4px 0;
+      }
+
+      .site-footer {
+        margin-top: 24px;
+      }
+      @media (max-width: 900px) {
+        .stage {
+          grid-template-columns: 1fr;
+          gap: 16px;
+        }
+        #map {
+          width: 100%;
+        }
+        .panel {
+          border-top: 1px solid var(--line);
+          padding-top: 12px;
+          max-height: none;
+        }
+        .readout {
+          grid-template-columns: 4.5em 5.5em 3.5em 1fr;
+        }
+        .readout span:last-child {
+          grid-column: 1 / -1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <header class="site-header" id="siteheader">
+        <div class="brand">
+          <a class="wordmark" href="../">Realtime Weather</a
+          ><span class="tagline"
+            >Part of
+            <a href="https://tba21.org/uni_weathercommons">Weather Commons</a>,
+            TBA21–Academy UNI</span
+          >
+        </div>
+        <nav aria-label="Site">
+          <a href="../">Sketches</a>
+          <a href="../guide/">Guide</a>
+          <a href="../catalog/">Catalog</a>
+          <a
+            href="https://github.com/RealtimeUrbanismLab/weather-commons/blob/main/CONTRIBUTING.md"
+            >Contribute</a
+          >
+          <a href="https://community.ocean-archive.org/spaces/25478985"
+            >Community</a
+          >
+        </nav>
+      </header>
+
+      <div class="titlebar">
+        <div>
+          <h1>Downstream of marine cloud brightening</h1>
+          <p>
+            This map shows the downstream effects of marine cloud brightening
+            (MCB) in a climate model. Hirasawa et al. (2023) simulated MCB over
+            three subtropical ocean regions in CESM2 under the SSP2-4.5
+            scenario. They evaluated the response of precipitation, temperature
+            and 13 climate tipping elements, from Amazon rainforest drought to
+            Arctic sea-ice loss. Values are model outputs, 2034–2043.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="plain"
+          id="aboutbtn"
+          aria-haspopup="dialog"
+        >
+          About
+        </button>
+      </div>
+
+      <div class="controls" role="group" aria-label="Map controls">
+        <div
+          class="group"
+          role="group"
+          aria-label="Where clouds are brightened"
+        >
+          <span>Brightened Region</span>
+          <button type="button" data-exp="R1">NE Pacific</button>
+          <button type="button" data-exp="R2">SE Pacific</button>
+          <button type="button" data-exp="R3">SE Atlantic</button>
+          <button type="button" data-exp="R1R2R3">All three</button>
+          <button type="button" data-exp="SSP">None (warming alone)</button>
+        </div>
+        <div class="group" role="group" aria-label="Variable">
+          <span>Variable</span>
+          <button type="button" data-var="PRECT">Precipitation</button>
+          <button type="button" data-var="TREFHT">Temperature</button>
+          <button type="button" data-var="NONE">None</button>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="mapwrap">
+          <canvas
+            id="map"
+            aria-label="World map of modelled change. Boxes outlined in black are tipping elements; select one for details. Boxes outlined in white are where clouds are brightened."
+          ></canvas>
+          <p class="readout" id="readout" aria-live="polite"></p>
+          <div class="legend" id="legend"></div>
+        </div>
+        <aside class="panel" id="panel" aria-live="polite"></aside>
+      </div>
+
+      <footer class="site-footer">
+        <p>
+          <span>11</span><span>Ellie Madsen</span
+          ><span>Realtime Weather working group, Weather Commons</span>
+        </p>
+      </footer>
+    </main>
+
+    <dialog class="about" id="about" aria-labelledby="abouttitle">
+      <div class="about-head">
+        <div class="row">
+          <strong id="abouttitle">About this map</strong
+          ><button type="button" class="plain" id="aboutclose">Close</button>
+        </div>
+        <nav aria-label="About sections">
+          <a href="#a-about">About</a><a href="#a-method">Method</a
+          ><a href="#a-limits">Limitations</a><a href="#a-sources">Sources</a>
+        </nav>
+      </div>
+      <div class="about-body">
+        <h2 id="a-about">About</h2>
+        <p>
+          Marine cloud brightening (MCB) is a proposed form of solar radiation
+          modification. Sea-salt aerosol is sprayed into low marine clouds to
+          raise their cloud droplet number concentration. This makes the clouds
+          more reflective and cools the surface below. MCB has been proposed to
+          offset part of global warming, or to protect specific regions such as
+          coral reefs. Outdoor tests so far have been small in scale.
+        </p>
+        <p>
+          This map shows the results of a study of the downstream effects of MCB
+          in one climate model. Hirasawa et al. (2023) applied MCB in the
+          Community Earth System Model version 2 (CESM2; Danabasoglu et al.
+          2020) over three subtropical regions of marine stratocumulus cloud,
+          individually and in combination:
+        </p>
+        <ul>
+          <li>
+            <strong>NE Pacific (NEP):</strong> 0–30°N, 110–150°W (west of
+            Mexico)
+          </li>
+          <li>
+            <strong>SE Pacific (SEP):</strong> 30°S–0, 70–110°W (off Peru and
+            northern Chile)
+          </li>
+          <li>
+            <strong>SE Atlantic (SEA):</strong> 30°S–0, 25°W–15°E (off Angola
+            and Namibia)
+          </li>
+        </ul>
+        <p>
+          Each experiment runs from 2015 to 2064 under the SSP2-4.5 emissions
+          scenario (O'Neill et al. 2016) and has three ensemble members. An
+          ensemble member is one run of the model with the same forcing but
+          slightly different initial conditions. Each member therefore has its
+          own internal variability, such as different El Niño years, and
+          averaging across members separates the forced response from that
+          variability. The three MCB runs start from three members of the CESM2
+          Large Ensemble (Rodgers et al. 2021). The comparison without MCB uses
+          that ensemble's members: 16 for SSP2-4.5 and 50 for the historical
+          period.
+        </p>
+        <p>
+          The authors evaluated the response of 13 climate tipping elements.
+          These are components of the climate system that may cross a threshold
+          into a different, possibly irreversible state (Armstrong McKay et al.
+          2022), and each is represented by one indicator.
+        </p>
+        <p>
+          MCB is represented in an idealised way. The model does not simulate
+          sea-salt emissions or how the particles form cloud droplets. Instead,
+          in each region it sets the cloud droplet number concentration of
+          liquid clouds over the ocean to 600 cm⁻³, several times typical values
+          over the remote ocean. The experiments therefore show how the climate
+          system responds to a large, prescribed brightening of these clouds.
+          They don't represent a particular spraying technology or deployment
+          plan.
+        </p>
+        <p>
+          In this model the remote response depends strongly on the region. MCB
+          in the SE Pacific increases Amazon precipitation and reduces the
+          Amazon water deficit (MCWD +73.7 mm). MCB in the SE Atlantic has the
+          opposite effect (−73.2 mm), while producing almost no global-mean
+          cooling (−0.02 °C in 2034–2043).
+        </p>
+
+        <h2 id="a-method">Method</h2>
+        <p>
+          All values are differences in decadal means for 2034–2043. The MCB
+          response is the mean of the three MCB ensemble members minus the
+          SSP2-4.5 ensemble mean without MCB, from the CESM2 Large Ensemble.
+          "None (warming alone)" shows the SSP2-4.5 ensemble mean for 2034–2043
+          minus the historical ensemble mean for 1995–2014. The authors chose
+          2034–2043 as the decade in which MCB in all three regions offsets
+          global-mean warming relative to 1995–2014. The data shown here
+          reproduce this: −1.08 °C from MCB against +1.08 °C of warming.
+        </p>
+        <p>
+          Precipitation is total precipitation (PRECT: convective and
+          large-scale, rain and snow), in mm/day. Temperature is 2 m air
+          temperature (TREFHT). Data are shown on the model's native grid of
+          about 0.94° × 1.25°. Coastlines are the model's land mask, where land
+          fraction is above 0.5.
+        </p>
+        <h3>Colour</h3>
+        <p>
+          Colour classes are 0.25 mm/day wide for precipitation and 0.5 °C wide
+          for temperature. The central white class spans ±0.125 mm/day or ±0.25
+          °C. Cells where the change isn't statistically significant at the 5%
+          level are shown in lighter colours. The test is a two-sided two-sample
+          t-test with pooled standard deviation, following the authors' analysis
+          code. A full-strength white cell is therefore a small but
+          statistically significant change, while a lighter colour marks a
+          change that can't be distinguished from the model's internal
+          variability.
+        </p>
+        <h3>Tipping elements</h3>
+        <p>
+          Each tipping element is represented by one indicator averaged over a
+          region, with a direction of change that the authors associate with
+          increased tipping risk: for example, a weaker AMOC or a lower Amazon
+          water-deficit value. Soft grey box outlines show the sign of the
+          effect on tipping risk for the selected brightened region. The outline
+          is thickest and darkest for increased risk, medium for no significant
+          change (p ≥ 0.05), and thinnest and lightest for reduced risk.
+          Significance uses the same t-test on decadal means, comparing the 3
+          MCB members with 16 SSP2-4.5 members. The hovered or selected tipping
+          element is outlined in orange. Brightened regions are shown as white
+          bands with a soft grey-blue edge.
+        </p>
+
+        <h2 id="a-limits">Limitations</h2>
+        <ul>
+          <li>
+            Results are from a single model, CESM2. Regional precipitation
+            responses to MCB vary between models. Jones et al. (2009), using a
+            Met Office Hadley Centre model, also found that MCB over the South
+            Atlantic reduced Amazon precipitation. That is consistent with the
+            SE Atlantic result here, but agreement on other regional responses
+            has not been tested on this map.
+          </li>
+          <li>
+            MCB is prescribed as a fixed cloud droplet number concentration (600
+            cm⁻³) rather than simulated from sea-salt emissions. The
+            uncertainties of aerosol–cloud interactions are therefore not
+            represented. These include cloud adjustments that can offset or
+            reverse the brightening (Feingold et al. 2024).
+          </li>
+          <li>
+            Three ensemble members per experiment limit how well the forced
+            response can be separated from internal variability. Some
+            non-significant results may hide real responses. With 13 indicators
+            and 4 experiments tested at the 5% level, two or three false
+            positives would be expected by chance.
+          </li>
+          <li>
+            Forcing is constant in fixed regions for 50 years. It does not
+            represent seasonal, adaptive or interrupted deployment, including
+            termination.
+          </li>
+          <li>
+            "Increased risk" refers to the direction of change of each indicator
+            as defined by the authors. It does not mean that a threshold is
+            crossed. For example, the authors count increased Sahel
+            precipitation as increased risk for the Sahel / West African monsoon
+            ("greening") tipping element, a change that may be beneficial
+            locally.
+          </li>
+          <li>
+            The indicators describe physical climate variables. They don't
+            quantify impacts on people or ecosystems.
+          </li>
+        </ul>
+
+        <h2 id="a-sources">Sources</h2>
+        <h3>Data</h3>
+        <ul>
+          <li>
+            Hirasawa, H., Hingmire, D., Singh, H., Rasch, P. J. and Mitra, P.
+            (2023), "Effect of regional marine cloud brightening interventions
+            on climate tipping elements", <em>Geophysical Research Letters</em>
+            50, e2023GL104314,
+            <a href="https://doi.org/10.1029/2023GL104314"
+              >doi:10.1029/2023GL104314</a
+            >. Model output and analysis code:
+            <a href="https://zenodo.org/records/8384453"
+              >Zenodo record 8384453</a
+            >
+            (published 1 May 2023), CC BY 4.0, downloaded 23 November 2026.
+            Precipitation and temperature maps and tipping-element indicators
+            are model output: CESM2, about 1°, SSP2-4.5. The runs without MCB
+            are from the CESM2 Large Ensemble, included in the same record.
+          </li>
+          <li>
+            <strong>Processing.</strong> Following the authors' notebook:
+            decadal means for 2034–2043 (and 1995–2014), mean of the MCB members
+            minus mean without MCB, and a pooled two-sample t-test.
+            Precipitation is converted to mm/day, and sea-ice and permafrost
+            area to million km². For coral indicators with several file
+            versions, the newest is used.
+          </li>
+          <li>
+            <strong>Coastlines</strong> are the model's land mask (land fraction
+            above 0.5). <strong>Colour scales</strong> follow the paper's
+            figures: ColorBrewer RdBu for temperature and BrBG for
+            precipitation. The selection colour is taken from PiYG, the scale of
+            the paper's tipping-element figure.
+          </li>
+        </ul>
+        <h3>References</h3>
+        <ul>
+          <li>
+            Armstrong McKay, D. I. et al. (2022), "Exceeding 1.5°C global
+            warming could trigger multiple climate tipping points",
+            <em>Science</em> 377, eabn7950,
+            <a href="https://doi.org/10.1126/science.abn7950"
+              >doi:10.1126/science.abn7950</a
+            >.
+          </li>
+          <li>
+            Danabasoglu, G. et al. (2020), "The Community Earth System Model
+            Version 2 (CESM2)",
+            <em>Journal of Advances in Modeling Earth Systems</em> 12,
+            e2019MS001916,
+            <a href="https://doi.org/10.1029/2019MS001916"
+              >doi:10.1029/2019MS001916</a
+            >.
+          </li>
+          <li>
+            Feingold, G. et al. (2024), "Physical science research needed to
+            evaluate the viability and risks of marine cloud brightening",
+            <em>Science Advances</em> 10, eadi8594,
+            <a href="https://doi.org/10.1126/sciadv.adi8594"
+              >doi:10.1126/sciadv.adi8594</a
+            >.
+          </li>
+          <li>
+            Jones, A., Haywood, J. and Boucher, O. (2009), "Climate impacts of
+            geoengineering marine stratocumulus clouds",
+            <em>Journal of Geophysical Research: Atmospheres</em> 114,
+            <a href="https://doi.org/10.1029/2008JD011450"
+              >doi:10.1029/2008JD011450</a
+            >.
+          </li>
+          <li>
+            NOAA Coral Reef Watch, "Methodology, product description, and data
+            availability of daily global 5km satellite coral bleaching heat
+            stress monitoring products",
+            <a
+              href="https://coralreefwatch.noaa.gov/product/5km/methodology.php"
+              >coralreefwatch.noaa.gov</a
+            >. Bleaching alert levels cited in the coral reef indicator notes.
+          </li>
+          <li>
+            O'Neill, B. C. et al. (2016), "The Scenario Model Intercomparison
+            Project (ScenarioMIP) for CMIP6",
+            <em>Geoscientific Model Development</em> 9, 3461–3482,
+            <a href="https://doi.org/10.5194/gmd-9-3461-2016"
+              >doi:10.5194/gmd-9-3461-2016</a
+            >.
+          </li>
+          <li>
+            Rodgers, K. B. et al. (2021), "Ubiquity of human-induced changes in
+            climate variability", <em>Earth System Dynamics</em> 12, 1393–1411,
+            <a href="https://doi.org/10.5194/esd-12-1393-2021"
+              >doi:10.5194/esd-12-1393-2021</a
+            >. The CESM2 Large Ensemble.
+          </li>
+        </ul>
+        <h3>Related studies</h3>
+        <ul>
+          <li>
+            Rasch, P. J. et al. (2024), "A protocol for model intercomparison of
+            impacts of marine cloud brightening climate intervention",
+            <em>Geoscientific Model Development</em> 17, 7963–7994,
+            <a href="https://doi.org/10.5194/gmd-17-7963-2024"
+              >doi:10.5194/gmd-17-7963-2024</a
+            >.
+          </li>
+          <li>
+            Wan, J. et al. (2024), "Diminished efficacy of regional marine cloud
+            brightening in a warmer world", <em>Nature Climate Change</em>
+            14, 808–814,
+            <a href="https://doi.org/10.1038/s41558-024-02046-7"
+              >doi:10.1038/s41558-024-02046-7</a
+            >.
+          </li>
+        </ul>
+      </div>
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>
